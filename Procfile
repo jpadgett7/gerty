@@ -1,1 +1,1 @@
-web: bin/hubot -a irc -n Gerty
+web: bin/hubot -a slack -n gerty
