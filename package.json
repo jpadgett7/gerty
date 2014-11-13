@@ -10,7 +10,8 @@
     "hubot-help": "^0.1.1",
     "hubot-rules": "^0.1.0",
     "hubot-scripts": "^2.5.16",
-    "hubot-slack": "~2.2.0"
+    "hubot-slack": "~2.2.0",
+    "hubot-auth": "~1.1.2"
   },
   "engines": {
     "node": "0.10.x"
