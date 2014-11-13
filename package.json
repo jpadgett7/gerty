@@ -12,7 +12,7 @@
     "hubot-scripts": "^2.5.16",
     "hubot-slack": "~2.2.0",
     "hubot-auth": "~1.1.2",
-    "aws2js": "~0.8.3"
+    "hubot-redis-brain": "0.0.2"
   },
   "engines": {
     "node": "0.10.x"
