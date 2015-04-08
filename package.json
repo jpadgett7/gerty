@@ -6,13 +6,9 @@
   "description": "A helpful robot for ACM SIG-Game",
   "dependencies": {
     "hubot": "^2.9.3",
-    "hubot-diagnostics": "0.0.1",
-    "hubot-help": "^0.1.1",
-    "hubot-rules": "^0.1.0",
     "hubot-scripts": "^2.5.16",
     "hubot-slack": "~2.2.0",
     "hubot-auth": "~1.1.2",
-    "hubot-redis-brain": "0.0.2"
   },
   "engines": {
     "node": "0.10.x"
