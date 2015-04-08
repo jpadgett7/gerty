@@ -1,7 +1,3 @@
 [
-  "hubot-diagnostics",
-  "hubot-help",
-  "hubot-rules",
-  "hubot-auth",
-  "hubot-redis-brain"
+  "hubot-auth"
 ]
