@@ -1,3 +1,5 @@
 [
-  "hubot-auth"
+  "hubot-auth",
+  "hubot-diagnostics",
+  "hubot-help"
 ]
