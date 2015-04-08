@@ -3,3 +3,4 @@ node_modules
 secret.sh
 *~
 .hubot_history
+brain-dump.json
