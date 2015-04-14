@@ -1,5 +1,5 @@
 # Description:
-#   Generates help commands for Hubot.
+#   Posts updates to status.megaminerai.com
 #
 # Commands:
 #   hubot help - Displays all of the help commands that Hubot knows about.
@@ -13,14 +13,19 @@
 
 
 _ = require "underscore"
-nodegit = require "nodegit"
-yaml = require "yaml"
+git = require "nodegit"
+yaml = require "js-yaml"
 moment = require "moment"
 slug = require "slug"
 promisify = require "promisify-node"
 fse = promisify(require("fs-extra"))
 path = require "path"
 tmp = require 'tmp'
+
+
+class UpdateError
+    constructor: (@message) ->
+
 
 categories = _ ['arena', 'food', 'gameserver', 'git', 'visualizer', 'webserver']
 tags = _ ['OK', 'Warning', 'Down']
@@ -39,28 +44,28 @@ validateOptions = (options) ->
     # Ensure we're using a real category
     if not categories.contains(options.category)
         choices = joinString ", ", categories
-        throw message: "Bad category. Please choose one of [#{choices}]"
+        throw new UpdateError("Bad category. Please choose one of [#{choices}]")
 
     console.log "Category OK"
 
     # Ensure we're using a real tag
     if not tags.contains(options.status)
         choices = joinString ", ", tags
-        throw message: "Bad status. Please choose one of [#{choices}]"
+        throw new UpdateError("Bad status. Please choose one of [#{choices}]")
 
     console.log "Status OK"
 
     # Ensure we have a title
     if not options.title?
-        throw message: "Please provide a title for the update."
+        throw new UpdateError("Please provide a title for the update.")
 
-    # Ensure we have a message
-    if not options.message?
-        throw message: "Please provide a message for the update."
+    # Ensure we have a title
+    if not options.author?
+        throw new UpdateError("Please provide an author for the update.")
 
     console.log "Options are valid!"
 
-updateStatus = (tmpPath, content, options) ->
+updateStatus = (msg, tmpPath, content, options) ->
 
     # Check that our options are OK
     validateOptions options
@@ -69,84 +74,92 @@ updateStatus = (tmpPath, content, options) ->
     date = moment()
 
     u = do date.unix
-    o = do date.offset
+    o = do date.utcOffset
 
-    author = nodegit.Signature.create options.author, "siggame@mst.edu", u, o
-    committer = nodegit.Signature.create "Gerty", "siggame@mst.edu", u, o
+    author = git.Signature.create options.author, "siggame@mst.edu", u, o
+    committer = git.Signature.create "Gerty", "siggame@mst.edu", u, o
 
-    fontMatter = yaml.safeDump
+    frontMatter = yaml.safeDump
         layout: layout
         category: options.category
         tags: options.status
         date: date.format 'YYYY-MM-DD HH:mm:ss ZZ'
 
-    fileName = "#{date.format 'YYYY-MM-DD'}-#{slug options.title}"
-    fileContent = "---
-        #{fontmatter}
-        ---
+    fileName = "#{date.format 'YYYY-MM-DD'}-#{slug options.title}.md"
+    fileContent = "---\n#{frontMatter}---\n\n#{content}\n"
 
-        #{options.message}
-        "
     repo = null
-    posts_dir = null
     index = null
     oid = null
 
-    Clone.clone('https://git@github.com:siggame/status', tmpPath)
+    git.Clone.clone('https://github.com/siggame/status', tmpPath)
         .then (repoResult) ->
+            # Save the repo
             repo = repoResult
-            posts_dir = path.join repo.workdir(), "_posts"
 
         .then () ->
+            # Write our update file
+            posts_dir = path.join repo.workdir(), "_posts"
             filePath = path.join posts_dir, fileName
             fse.writeFile filePath, fileContent
 
         .then () ->
+            # Get the repo's index
             repo.openIndex()
 
         .then (indexResult) ->
+            # Read the index
             index = indexResult
             index.read(1)
 
         .then () ->
-            # this file is in a subdirectory and can use a relative path
+            # Add our file to the index
             filePath = path.join "_posts", fileName
             index.addByPath filePath
 
         .then () ->
+            # Update the index
             index.write()
 
         .then () ->
+            # Create our new tree for the commit
             index.writeTree()
 
         .then (oidResult) ->
+            # Get the reference (hash) for HEAD
             oid = oidResult
-            nodegit.Reference.nameToId(repo, "HEAD")
+            git.Reference.nameToId(repo, "HEAD")
 
         .then (head) ->
+            # Get the HEAD commit
             repo.getCommit(head)
 
         .then (parent) ->
-            msg = "Update status for #{options.category}"
-            repo.createCommit "HEAD", author, committer, msg, oid, [parent]
+            # Make the commit!
+            m = "Update status for #{options.category}"
+            repo.createCommit "HEAD", author, committer, m, oid, [parent]
 
-        .done (commitId) ->
-            console.log "New Commit: ", commitId
+        .done (ref) ->
+            msg.reply "Committed update for #{options.category} (#{ref})"
 
 
 module.exports = (robot) ->
 
-    robot.respond /update (.*) to (.*): (.*): (.*)$/i, (msg) ->
+    robot.respond /update (.*) to (.*); (.+): (.+)$/i, (msg) ->
         options =
+            author: msg.message.user.name
             category: msg.match[1]
             status: msg.match[2]
             title: msg.match[3]
         content = msg.match[4]
 
-        try
-            tmp.dir (err, path, cleanupCallback) ->
-                updateStatus path, content, options
+        console.log options
+
+        tmp.dir (err, path, cleanupCallback) ->
+            try
+                updateStatus msg, path, content, options
+            catch error
+                console.log "Encountered an error!"
+                msg.reply error.message
+            finally
                 do cleanupCallback
-        catch error
-            console.log "Encountered an error!"
-            msg.reply error.message
