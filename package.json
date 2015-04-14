@@ -10,7 +10,15 @@
     "hubot-diagnostics": "0.0.1",
     "hubot-help": "^0.1.1",
     "hubot-scripts": "^2.5.16",
-    "hubot-slack": "~2.2.0"
+    "hubot-slack": "~2.2.0",
+    "yaml": "~0.2.3",
+    "moment": "~2.10.2",
+    "slug": "~0.8.0",
+    "nodegit": "~0.3.3",
+    "promisify-node": "~0.1.5",
+    "fs-extra": "~0.18.0",
+    "underscore": "~1.8.3",
+    "tmp": "0.0.25"
   },
   "engines": {
     "node": "0.10.x"
