@@ -6,6 +6,7 @@
 #
 # Configuration:
 #   HUBOT_STATUS_REPO - The URL to the status repo to update.
+#   HUBOT_STATUS_UPDATE_ROLE - The `hubot-auth` role required to submit updates.
 #   HUBOT_STATUS_CRED_USERNAME - Username to use to authenticate. Defaults to "git".
 #   HUBOT_STATUS_CRED_PASSPHRASE - Credential passphrase. Defaults to "".
 #   HUBOT_STATUS_PUBLIC_KEY - Path to public key of the credential
@@ -33,6 +34,7 @@ config =
         passphrase: process.env.HUBOT_STATUS_CRED_PASSPHRASE or ""
         publickey: process.env.HUBOT_STATUS_PUBLIC_KEY
         privatekey: process.env.HUBOT_STATUS_PRIVATE_KEY
+    update_role: process.env.HUBOT_STATUS_UPDATE_ROLE or "updater"
 
 class UpdateError
     ###
@@ -215,6 +217,10 @@ module.exports = (robot) ->
             robot.logger.warning "Credential '#{name}' is not set."
 
     robot.respond /update (.*) to (.*); (.+): (.+)$/i, (msg) ->
+
+        unless robot.auth.hasRole msg.envelope.user, config.update_role
+            msg.reply "Sorry! You need the #{config.update_role} role to update statuses."
+            return
 
         # Stop if we don't have a repo URL
         unless config.repo_url?
