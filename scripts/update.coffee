@@ -4,6 +4,13 @@
 # Commands:
 #   hubot update <component> to <status>; <title>: <message> - Post a new status update
 #
+# Configuration:
+#   HUBOT_STATUS_REPO - The URL to the status repo to update.
+#   HUBOT_STATUS_CRED_USERNAME - Username to use to authenticate. Defaults to "git".
+#   HUBOT_STATUS_CRED_PASSPHRASE - Credential passphrase. Defaults to "".
+#   HUBOT_STATUS_PUBLIC_KEY - Path to public key of the credential
+#   HUBOT_STATUS_PRIVATE_KEY - Path to private key of the credential
+#
 
 _ = require "underscore"
 git = require "nodegit"
@@ -21,6 +28,11 @@ config =
     layout: "update"
     categories: _ ["arena", "food", "gameserver", "git", "visualizer", "webserver"]
     tags: _ ["OK", "Warning", "Down"]
+    cred:
+        username: process.env.HUBOT_STATUS_CRED_USERNAME or "git"
+        passphrase: process.env.HUBOT_STATUS_CRED_PASSPHRASE or ""
+        publickey: process.env.HUBOT_STATUS_PUBLIC_KEY
+        privatekey: process.env.HUBOT_STATUS_PRIVATE_KEY
 
 class UpdateError
     ###
@@ -94,11 +106,16 @@ updateStatus = (msg, tmpPath, update) ->
     index = null
     oid = null
 
-    # Set up SSH creds for cloning
+    # Set up SSH creds
+    creds = credentials: (url, username) ->
+        git.Cred.sshKeyNew config.cred.username,
+            config.cred.publickey,
+            config.cred.privatekey,
+            config.cred.passphrase
+
+    # Set up creds for cloning
     cloneOptions =
-        remoteCallbacks:
-            credentials: (url, userName) ->
-                git.Cred.sshKeyFromAgent userName
+        remoteCallbacks: creds
 
     # Clone the repo
     git.Clone.clone(config.repo_url, tmpPath, cloneOptions)
@@ -161,9 +178,7 @@ updateStatus = (msg, tmpPath, update) ->
             remote = remoteResult
 
             # Set up credentials to push to "origin"
-            remote.setCallbacks
-                credentials: (url, userName) ->
-                    git.Cred.sshKeyFromAgent userName
+            remote.setCallbacks creds
 
             # Set up connection to push to "origin"
             remote.connect git.Enums.DIRECTION.PUSH
@@ -188,19 +203,29 @@ updateStatus = (msg, tmpPath, update) ->
             fse.remove tmpPath, (err) ->
                 if err
                     msg.reply "Error deleting #{tmpPath}: #{err}"
-                msg.reply "Done!"
 
 
 module.exports = (robot) ->
 
     unless config.repo_url?
-        robot.logger.warning 'HUBOT_STATUS_REPO environment variable is not set'
+        robot.logger.warning "HUBOT_STATUS_REPO variable is not set."
+
+    for name, val of config.cred
+        unless val?
+            robot.logger.warning "Credential '#{name}' is not set."
 
     robot.respond /update (.*) to (.*); (.+): (.+)$/i, (msg) ->
 
+        # Stop if we don't have a repo URL
         unless config.repo_url?
             msg.reply "I 'unno what to clone. Please set HUBOT_STATUS_REPO."
             return
+
+        # Stop if we're missing credentials
+        for name, val of config.cred
+            unless val?
+                msg.reply "I need credentials to clone! Check your env vars."
+                return
 
         update =
             author: msg.message.user.name
