@@ -2,15 +2,8 @@
 #   Posts updates to status.megaminerai.com
 #
 # Commands:
-#   hubot help - Displays all of the help commands that Hubot knows about.
-#   hubot help <query> - Displays all help commands that match <query>.
+#   hubot update <component> to <status>; <title>: <message> - Post a new status update
 #
-# URLS:
-#   /hubot/help
-#
-# Notes:
-#   These commands are grabbed from comment blocks at the top of each file.
-
 
 _ = require "underscore"
 git = require "nodegit"
@@ -27,6 +20,8 @@ class UpdateError
     constructor: (@message) ->
 
 
+repo_url = 'git@bitbucket.org:michaelwisely/status.git'
+
 categories = _ ['arena', 'food', 'gameserver', 'git', 'visualizer', 'webserver']
 tags = _ ['OK', 'Warning', 'Down']
 
@@ -38,37 +33,31 @@ joinString = (char, _lst) ->
             x + char + y
     _lst.reduce maybeJoin, ""
 
-validateOptions = (options) ->
-    console.log "Validating options"
+validateOptions = (update) ->
 
     # Ensure we're using a real category
-    if not categories.contains(options.category)
+    if not categories.contains(update.category)
         choices = joinString ", ", categories
         throw new UpdateError("Bad category. Please choose one of [#{choices}]")
 
-    console.log "Category OK"
-
     # Ensure we're using a real tag
-    if not tags.contains(options.status)
+    if not tags.contains(update.status)
         choices = joinString ", ", tags
         throw new UpdateError("Bad status. Please choose one of [#{choices}]")
 
-    console.log "Status OK"
-
     # Ensure we have a title
-    if not options.title?
+    if not update.title?
         throw new UpdateError("Please provide a title for the update.")
 
     # Ensure we have a title
-    if not options.author?
+    if not update.author?
         throw new UpdateError("Please provide an author for the update.")
 
-    console.log "Options are valid!"
 
-updateStatus = (msg, tmpPath, content, options) ->
+updateStatus = (msg, tmpPath, update) ->
 
     # Check that our options are OK
-    validateOptions options
+    validateOptions update
 
     layout = 'update'
     date = moment()
@@ -76,23 +65,29 @@ updateStatus = (msg, tmpPath, content, options) ->
     u = do date.unix
     o = do date.utcOffset
 
-    author = git.Signature.create options.author, "siggame@mst.edu", u, o
+    author = git.Signature.create update.author, "siggame@mst.edu", u, o
     committer = git.Signature.create "Gerty", "siggame@mst.edu", u, o
 
     frontMatter = yaml.safeDump
         layout: layout
-        category: options.category
-        tags: options.status
+        category: update.category
+        tags: update.status
         date: date.format 'YYYY-MM-DD HH:mm:ss ZZ'
 
-    fileName = "#{date.format 'YYYY-MM-DD'}-#{slug options.title}.md"
-    fileContent = "---\n#{frontMatter}---\n\n#{content}\n"
+    fileName = "#{date.format 'YYYY-MM-DD'}-#{slug update.title}.md"
+    fileContent = "---\n#{frontMatter}---\n\n#{update.message}\n"
 
     repo = null
+    remote = null
     index = null
     oid = null
 
-    git.Clone.clone('https://github.com/siggame/status', tmpPath)
+    cloneOptions =
+        remoteCallbacks:
+            credentials: (url, userName) ->
+                git.Cred.sshKeyFromAgent userName
+
+    git.Clone.clone(repo_url, tmpPath, cloneOptions)
         .then (repoResult) ->
             # Save the repo
             repo = repoResult
@@ -136,30 +131,66 @@ updateStatus = (msg, tmpPath, content, options) ->
 
         .then (parent) ->
             # Make the commit!
-            m = "Update status for #{options.category}"
+            m = "Update status for #{update.category}"
             repo.createCommit "HEAD", author, committer, m, oid, [parent]
 
-        .done (ref) ->
-            msg.reply "Committed update for #{options.category} (#{ref})"
+        .then (ref) ->
+            # Report our great success
+            msg.reply "Committed update for #{update.category} (#{ref})"
 
+        .then () ->
+            # Get the "origin" remote
+            repo.getRemote("origin")
+
+        .then (remoteResult) ->
+            remote = remoteResult
+
+            # Set up credentials to push to "origin"
+            remote.setCallbacks
+                credentials: (url, userName) ->
+                    git.Cred.sshKeyFromAgent userName
+
+            # Set up connection to push to "origin"
+            remote.connect git.Enums.DIRECTION.PUSH
+
+        .then () ->
+            # Push!
+            remote.push ["refs/heads/master:refs/heads/master"],
+                null,
+                repo.defaultSignature(),
+                "Push to master"
+
+        .then () ->
+            # Report our success
+            msg.reply "#{update.category} status updated to #{update.status}"
+
+        .catch (reason) ->
+            # Or if it didn't work, report our error
+            msg.reply "Uh oh... #{reason}"
+
+        .done () ->
+            # Now we're done with the repo, and we can delete it.
+            fse.remove tmpPath, (err) ->
+                if err
+                    msg.reply "Error deleting #{tmpPath}: #{err}"
+                msg.reply "Done!"
 
 module.exports = (robot) ->
 
     robot.respond /update (.*) to (.*); (.+): (.+)$/i, (msg) ->
-        options =
+        update =
             author: msg.message.user.name
             category: msg.match[1]
             status: msg.match[2]
             title: msg.match[3]
-        content = msg.match[4]
+            message: msg.match[4]
 
-        console.log options
+        tmpOptions =
+            prefix: "gerty-clone-tmp"
 
-        tmp.dir (err, path, cleanupCallback) ->
+        tmp.dir tmpOptions, (err, path, cleanupCallback) ->
             try
-                updateStatus msg, path, content, options
+                updateStatus msg, path, update
             catch error
                 console.log "Encountered an error!"
                 msg.reply error.message
-            finally
-                do cleanupCallback
