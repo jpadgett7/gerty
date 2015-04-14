@@ -22,12 +22,15 @@ fse = promisify(require("fs-extra"))
 path = require "path"
 tmp = require 'tmp'
 
-
 categories = _ ['arena', 'food', 'gameserver', 'git', 'visualizer', 'webserver']
 tags = _ ['OK', 'Warning', 'Down']
 
 joinString = (char, _lst) ->
-    maybeJoin = (x, y) -> if x == "" then y else x + char + y
+    maybeJoin = (x, y) ->
+        if x == ""
+            y
+        else
+            x + char + y
     _lst.reduce maybeJoin, ""
 
 validateOptions = (options) ->
@@ -36,25 +39,24 @@ validateOptions = (options) ->
     # Ensure we're using a real category
     if not categories.contains(options.category)
         choices = joinString ", ", categories
-        throw message:"Bad category. Please choose one of [#{choices}]"
+        throw message: "Bad category. Please choose one of [#{choices}]"
 
     console.log "Category OK"
 
     # Ensure we're using a real tag
     if not tags.contains(options.status)
         choices = joinString ", ", tags
-        console.log choices
-        throw {message:"Bad status. Please choose one of [#{choices}]"}
+        throw message: "Bad status. Please choose one of [#{choices}]"
 
     console.log "Status OK"
 
     # Ensure we have a title
     if not options.title?
-        throw message:"Please provide a title for the update."
+        throw message: "Please provide a title for the update."
 
     # Ensure we have a message
     if not options.message?
-        throw message:"Please provide a message for the update."
+        throw message: "Please provide a message for the update."
 
     console.log "Options are valid!"
 
