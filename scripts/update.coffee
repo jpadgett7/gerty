@@ -170,6 +170,19 @@ submitUpdate = (update, done) ->
         done result
 
 
+renderGitHubPage = (done) ->
+    options =
+        user: config.repo.owner
+        repo: config.repo.name
+        base: "gh-pages"
+        head: "master"
+
+    github.repos.merge options, (err, result) ->
+        if err
+            throw new UpdateError("Error creating file: #{err}")
+        done result
+
+
 updateStatus = (msg, update) ->
     ###
     Update a Jekyll status site
@@ -180,8 +193,9 @@ updateStatus = (msg, update) ->
 
     prepareUpdate update, (newUpdate) ->
         submitUpdate newUpdate, (result) ->
-            msg.reply "Updated status of #{update.category} to #{update.status}"
-            msg.reply "View the commit here: #{result.commit.html_url}"
+            renderGitHubPage (mergeResult) ->
+                msg.reply "Updated status of #{update.category} to #{update.status}"
+                msg.reply "View the commit here: #{result.commit.html_url}"
 
 
 module.exports = (robot) ->
