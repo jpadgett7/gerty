@@ -5,42 +5,56 @@
 #   hubot update <component> to <status>; <title>: <message> - Post a new status update
 #
 # Configuration:
-#   HUBOT_STATUS_REPO - The URL to the status repo to update.
+#   HUBOT_STATUS_REPO_NAME - The name of the status repository to use.
+#   HUBOT_STATUS_REPO_OWNER - The name of the repository's owner.
 #   HUBOT_STATUS_UPDATE_ROLE - The `hubot-auth` role required to submit updates.
-#   HUBOT_STATUS_CRED_USERNAME - Username to use to authenticate. Defaults to "git".
-#   HUBOT_STATUS_CRED_PASSPHRASE - Credential passphrase. Defaults to "".
-#   HUBOT_STATUS_PUBLIC_KEY - Path to public key of the credential
-#   HUBOT_STATUS_PRIVATE_KEY - Path to private key of the credential
+#       Defaults to 'updater'.
+#   HUBOT_STATUS_GITHUB_TOKEN - GitHub Token with `repo` scope for a user
+#       who is authorized to write to the given repo
 #
 
 _ = require "underscore"
-git = require "nodegit"
+GitHubAPI = require("github")
 moment = require "moment"
-path = require "path"
-promisify = require "promisify-node"
 slug = require "slug"
-tmp = require "tmp"
 yaml = require "js-yaml"
-fse = promisify(require("fs-extra"))
+
 
 # Configuration Options
 config =
-    repo_url: process.env.HUBOT_STATUS_REPO
     layout: "update"
     categories: _ ["arena", "food", "gameserver", "git", "visualizer", "webserver"]
     tags: _ ["OK", "Warning", "Down"]
     cred:
-        username: process.env.HUBOT_STATUS_CRED_USERNAME or "git"
-        passphrase: process.env.HUBOT_STATUS_CRED_PASSPHRASE or ""
-        publickey: process.env.HUBOT_STATUS_PUBLIC_KEY
-        privatekey: process.env.HUBOT_STATUS_PRIVATE_KEY
+        token: process.env.HUBOT_STATUS_GITHUB_TOKEN
+    repo:
+        name: process.env.HUBOT_STATUS_REPO_NAME
+        owner: process.env.HUBOT_STATUS_REPO_OWNER
     update_role: process.env.HUBOT_STATUS_UPDATE_ROLE or "updater"
+
+
+# API Helper
+github = new GitHubAPI
+    version: "3.0.0"
+    debug: false
+    protocol: "https"
+    timeout: 5000
+    headers:
+        "user-agent": "SIG-Game-Hubot-Gerty"
+
+# Authenticate if possible
+if config.cred.token?
+    github.authenticate
+        type: "oauth"
+        token: config.cred.token
+
 
 class UpdateError
     ###
     An Error class for throwing
     ###
     constructor: (@message) ->
+
 
 joinString = (char, _lst) ->
     ###
@@ -74,7 +88,89 @@ validateUpdate = (update) ->
         throw new UpdateError("Please provide an author for the update.")
 
 
-updateStatus = (msg, tmpPath, update) ->
+prepareTitle = (update, done) ->
+    ###
+    Prepares a unique title for the update file.
+    ###
+
+    counter = 0
+    nextTitle = () ->
+        ###
+        Prepare the file's title, ensuring that it is unique by
+        tacking a -1, -2, -3, etc onto the end of the filename.
+        ###
+        title = "#{update.date.format 'YYYY-MM-DD'}-#{slug update.title}"
+        if counter > 0
+            title = "#{title}-#{counter}"
+        counter += 1
+        return "#{title}.md"
+
+    options =
+        user: config.repo.owner
+        repo: config.repo.name
+        path: "_posts"
+        ref: "master"
+
+    github.repos.getContent options, (err, result) ->
+        if err
+            throw new UpdateError("Error getting content: #{err}")
+
+        # Retrieve the file names from `_posts/`
+        names = _(result).map((x) -> x.name)
+
+        # Generate titles until we have a unique one.
+        title = do nextTitle
+        while _(names).contains title
+            title = do nextTitle
+
+        # Call the callback when we're done.
+        done title
+
+
+prepareUpdate = (update, done) ->
+    ###
+    Prepare a title and content for a status update
+    ###
+
+    # YAML front matter for post
+    frontMatter = yaml.safeDump
+        layout: config.layout
+        category: update.category
+        tags: update.status
+        date: update.date.format 'YYYY-MM-DD HH:mm:ss ZZ'
+
+    # Post content
+    content = "---\n#{frontMatter}---\n\n#{update.message}\n"
+
+    # Get a unique title
+    prepareTitle update, (fileName) ->
+        file =
+            file:
+                name: fileName
+                content: content
+                base64: new Buffer(content).toString('base64')
+        done _.extend(update, file)
+
+
+submitUpdate = (update, done) ->
+    ###
+    Submit a status update to GitHub
+    ###
+    options =
+        user: config.repo.owner
+        repo: config.repo.name
+        path: "_posts/#{update.file.name}"
+        message: "Update status of #{update.category} to #{update.status}"
+        content: update.file.base64
+        branch: "master"
+
+    github.repos.createFile options, (err, result) ->
+        if err
+            throw new UpdateError("Error creating file: #{err}")
+        done result
+
+
+updateStatus = (msg, update) ->
     ###
     Update a Jekyll status site
     ###
@@ -82,139 +178,21 @@ updateStatus = (msg, tmpPath, update) ->
     # Check that our options are OK
     validateUpdate update
 
-    # Current time
-    date = moment()
-    u = do date.unix
-    o = do date.utcOffset
-
-    # Commit author details
-    author = git.Signature.create update.author, "siggame@mst.edu", u, o
-    committer = git.Signature.create "Gerty", "siggame@mst.edu", u, o
-
-    # YAML front matter for post
-    frontMatter = yaml.safeDump
-        layout: config.layout
-        category: update.category
-        tags: update.status
-        date: date.format 'YYYY-MM-DD HH:mm:ss ZZ'
-
-    # File bits
-    fileName = "#{date.format 'YYYY-MM-DD'}-#{slug update.title}.md"
-    fileContent = "---\n#{frontMatter}---\n\n#{update.message}\n"
-
-    # Repo bits
-    repo = null
-    remote = null
-    index = null
-    oid = null
-
-    # Set up SSH creds
-    creds = credentials: (url, username) ->
-        git.Cred.sshKeyNew config.cred.username,
-            config.cred.publickey,
-            config.cred.privatekey,
-            config.cred.passphrase
-
-    # Set up creds for cloning
-    cloneOptions =
-        remoteCallbacks: creds
-
-    # Clone the repo
-    git.Clone.clone(config.repo_url, tmpPath, cloneOptions)
-
-        .then (repoResult) ->
-            # Save the repo
-            repo = repoResult
-
-        .then () ->
-            # Write our update file
-            posts_dir = path.join repo.workdir(), "_posts"
-            filePath = path.join posts_dir, fileName
-            fse.writeFile filePath, fileContent
-
-        .then () ->
-            # Get the repo's index
-            repo.openIndex()
-
-        .then (indexResult) ->
-            # Read the index
-            index = indexResult
-            index.read(1)
-
-        .then () ->
-            # Add our file to the index
-            filePath = path.join "_posts", fileName
-            index.addByPath filePath
-
-        .then () ->
-            # Update the index
-            index.write()
-
-        .then () ->
-            # Create our new tree for the commit
-            index.writeTree()
-
-        .then (oidResult) ->
-            # Get the reference (hash) for HEAD
-            oid = oidResult
-            git.Reference.nameToId(repo, "HEAD")
-
-        .then (head) ->
-            # Get the HEAD commit
-            repo.getCommit(head)
-
-        .then (parent) ->
-            # Make the commit!
-            m = "Update status for #{update.category}"
-            repo.createCommit "HEAD", author, committer, m, oid, [parent]
-
-        .then (ref) ->
-            # Report our great success
-            msg.reply "Committed update for #{update.category} (#{ref})"
-
-        .then () ->
-            # Get the "origin" remote
-            repo.getRemote("origin")
-
-        .then (remoteResult) ->
-            remote = remoteResult
-
-            # Set up credentials to push to "origin"
-            remote.setCallbacks creds
-
-            # Set up connection to push to "origin"
-            remote.connect git.Enums.DIRECTION.PUSH
-
-        .then () ->
-            # Push!
-            remote.push ["refs/heads/master:refs/heads/master"],
-                null,
-                repo.defaultSignature(),
-                "Push to master"
-
-        .then () ->
-            # Report our success
-            msg.reply "#{update.category} status updated to #{update.status}"
-
-        .catch (reason) ->
-            # Or if it didn't work, report our error
-            msg.reply "Uh oh... #{reason}"
-
-        .done () ->
-            # Now we're done with the repo, and we can delete it.
-            fse.remove tmpPath, (err) ->
-                if err
-                    msg.reply "Error deleting #{tmpPath}: #{err}"
+    prepareUpdate update, (newUpdate) ->
+        submitUpdate newUpdate, (result) ->
+            msg.reply "Updated status of #{update.category} to #{update.status}"
+            msg.reply "View the commit here: #{result.commit.html_url}"
 
 
 module.exports = (robot) ->
+    # Sanity check our required variables
+    unless config.repo.name?
+        robot.logger.warning "HUBOT_STATUS_REPO_NAME variable is not set."
+    unless config.repo.owner?
+        robot.logger.warning "HUBOT_STATUS_REPO_OWNER variable is not set."
+    unless config.cred.token?
+        robot.logger.warning "HUBOT_STATUS_GITHUB_TOKEN variable is not set."
 
-    unless config.repo_url?
-        robot.logger.warning "HUBOT_STATUS_REPO variable is not set."
-
-    for name, val of config.cred
-        unless val?
-            robot.logger.warning "Credential '#{name}' is not set."
 
     robot.respond /update (.*) to (.*); (.+): (.+)$/i, (msg) ->
 
@@ -222,30 +200,26 @@ module.exports = (robot) ->
             msg.reply "Sorry! You need the #{config.update_role} role to update statuses."
             return
 
-        # Stop if we don't have a repo URL
-        unless config.repo_url?
-            msg.reply "I 'unno what to clone. Please set HUBOT_STATUS_REPO."
+        unless config.repo.name?
+            msg.reply "I 'unno what to update. Set HUBOT_STATUS_REPO_NAME."
+            return
+        unless config.repo.owner?
+            msg.reply "I 'unno what to update. Set HUBOT_STATUS_REPO_OWNER."
+            return
+        unless config.cred.token?
+            msg.reply "I can't get to the repo. Set HUBOT_STATUS_GITHUB_TOKEN."
             return
 
-        # Stop if we're missing credentials
-        for name, val of config.cred
-            unless val?
-                msg.reply "I need credentials to clone! Check your env vars."
-                return
-
         update =
+            date: moment()
             author: msg.message.user.name
             category: msg.match[1]
             status: msg.match[2]
             title: msg.match[3]
             message: msg.match[4]
 
-        tmpOptions =
-            prefix: "gerty-clone-tmp"
-
-        tmp.dir tmpOptions, (err, path, cleanupCallback) ->
-            try
-                updateStatus msg, path, update
-            catch error
-                console.log "Encountered an error!"
-                msg.reply error.message
+        try
+            updateStatus msg, update
+        catch error
+            console.log "Encountered an error: #{error.message}"
+            msg.reply error.message
