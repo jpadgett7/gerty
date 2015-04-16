@@ -135,6 +135,7 @@ prepareUpdate = (update, done) ->
     # YAML front matter for post
     frontMatter = yaml.safeDump
         layout: config.layout
+        title: update.title
         category: update.category
         tags: update.status
         date: update.date.format 'YYYY-MM-DD HH:mm:ss ZZ'
